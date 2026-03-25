@@ -15,6 +15,7 @@ import {
   Flag,
   ShieldCheck,
   Clock,
+  Bell,
 } from "lucide-react";
 import clsx from "clsx";
 
@@ -54,6 +55,8 @@ export default function SupervisorDashboard({ payPeriod, entries, missingStaff }
   const [flagNote, setFlagNote] = useState("");
   const [showFlagInput, setShowFlagInput] = useState(false);
   const [apiError, setApiError] = useState("");
+  const [reminderLoading, setReminderLoading] = useState(false);
+  const [reminderResult, setReminderResult] = useState<{ sent: number; missingCount: number } | null>(null);
 
   const submitted = entries.filter((e) => e.status === "submitted");
   const approved = entries.filter((e) => e.status === "approved");
@@ -123,6 +126,25 @@ export default function SupervisorDashboard({ payPeriod, entries, missingStaff }
       setApiError(e instanceof Error ? e.message : "Failed to approve all");
     } finally {
       setBulkLoading(false);
+    }
+  }
+
+  async function sendReminders() {
+    if (!payPeriod) return;
+    setReminderLoading(true);
+    setReminderResult(null);
+    try {
+      const res = await fetch("/api/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "remind_staff", pay_period_id: payPeriod.id }),
+      });
+      const data = await res.json();
+      setReminderResult({ sent: data.sent, missingCount: data.missingCount });
+    } catch {
+      setApiError("Failed to send reminders");
+    } finally {
+      setReminderLoading(false);
     }
   }
 
@@ -216,6 +238,37 @@ export default function SupervisorDashboard({ payPeriod, entries, missingStaff }
           >
             {bulkLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCheck className="w-4 h-4" />}
             Approve All ({submitted.length})
+          </button>
+        </div>
+      )}
+
+      {/* Send reminders */}
+      {missingStaff.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <p className="font-semibold text-slate-800">
+              {missingStaff.length} employee{missingStaff.length !== 1 ? "s" : ""} haven&apos;t submitted yet
+            </p>
+            <p className="text-sm text-slate-500 mt-0.5">
+              Send them an email reminder with a link to submit.
+            </p>
+            {reminderResult && (
+              <p className="text-sm text-green-700 font-medium mt-1">
+                ✓ Sent {reminderResult.sent} reminder{reminderResult.sent !== 1 ? "s" : ""}
+              </p>
+            )}
+          </div>
+          <button
+            onClick={sendReminders}
+            disabled={reminderLoading}
+            className="flex items-center gap-2 border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold px-4 py-2.5 rounded-xl transition-colors disabled:opacity-60 whitespace-nowrap text-sm"
+          >
+            {reminderLoading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Bell className="w-4 h-4" />
+            )}
+            Send Reminders
           </button>
         </div>
       )}
