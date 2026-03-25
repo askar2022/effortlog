@@ -31,7 +31,7 @@ export default function LoginPage() {
     });
     setLoading(false);
     if (error) {
-      setError("Could not send code. Please try again.");
+      setError(error.message);
       return;
     }
     setStep("otp");
