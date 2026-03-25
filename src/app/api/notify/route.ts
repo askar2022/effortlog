@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { resend, FROM } from "@/lib/email/resend";
+import { getResend, FROM } from "@/lib/email/resend";
 import {
   staffReminderEmail,
   supervisorAlertEmail,
@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
           periodEnd,
           dueDate,
         });
-        await resend.emails.send({
+        await getResend().emails.send({
           from: FROM,
           to: staff.email,
           subject,
@@ -122,7 +122,7 @@ export async function POST(request: NextRequest) {
           periodEnd,
           dueDate,
         });
-        await resend.emails.send({
+        await getResend().emails.send({
           from: FROM,
           to: supervisor.email,
           subject,

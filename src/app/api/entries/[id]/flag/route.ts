@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { resend, FROM } from "@/lib/email/resend";
+import { getResend, FROM } from "@/lib/email/resend";
 import { flaggedEmail } from "@/lib/email/templates";
 import type { Employee, PayPeriod } from "@/types";
 
@@ -68,7 +68,7 @@ export async function POST(
       periodEnd: fmt(period.end_date),
       supervisorNote: note,
     });
-    resend.emails.send({ from: FROM, to: emp.email, subject, html }).catch(() => {});
+    getResend().emails.send({ from: FROM, to: emp.email, subject, html }).catch(() => {});
   }
 
   return NextResponse.json({ success: true });

@@ -40,10 +40,10 @@ const navItems: Record<Role, { href: string; label: string; icon: React.ReactNod
 export default function NavBar({ role, name }: NavBarProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const supabase = createClient();
   const items = navItems[role];
 
   async function signOut() {
+    const supabase = createClient();
     await supabase.auth.signOut();
     router.push("/login");
     router.refresh();

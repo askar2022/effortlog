@@ -1,5 +1,7 @@
 "use client";
 
+export const dynamic = "force-dynamic";
+
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
@@ -9,7 +11,6 @@ type Step = "email" | "otp";
 
 export default function LoginPage() {
   const router = useRouter();
-  const supabase = createClient();
 
   const [step, setStep] = useState<Step>("email");
   const [email, setEmail] = useState("");
@@ -17,10 +18,13 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  // Create the Supabase client lazily inside handlers — never at render time,
+  // so the build does not throw when env vars are unavailable during prerender.
   async function sendOtp(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setLoading(true);
+    const supabase = createClient();
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: { shouldCreateUser: false },
@@ -37,6 +41,7 @@ export default function LoginPage() {
     e.preventDefault();
     setError("");
     setLoading(true);
+    const supabase = createClient();
     const { error } = await supabase.auth.verifyOtp({
       email,
       token: otp,
