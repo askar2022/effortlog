@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import type { Grant } from "@/types";
 import { Plus, Pencil, Check, X, Loader2, BookOpen, ToggleLeft, ToggleRight } from "lucide-react";
@@ -10,25 +9,26 @@ interface Props {
   grants: Grant[];
 }
 
-const emptyForm = { code: "", name: "" };
-
 export default function AdminGrants({ grants }: Props) {
   const router = useRouter();
-  const supabase = createClient();
   const [, startTransition] = useTransition();
 
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
-  const [form, setForm] = useState(emptyForm);
+  const [form, setForm] = useState({ code: "", name: "" });
   const [saving, setSaving] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [error, setError] = useState("");
 
-  function openAdd() {
-    setForm(emptyForm);
-    setEditId(null);
-    setShowForm(true);
-    setError("");
+  async function callApi(url: string, method: string, body?: unknown) {
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? "Request failed");
+    return data;
   }
 
   function openEdit(grant: Grant) {
@@ -42,41 +42,43 @@ export default function AdminGrants({ grants }: Props) {
     e.preventDefault();
     setError("");
     setSaving(true);
-
-    if (editId) {
-      const { error: err } = await supabase
-        .from("grants")
-        .update({ code: form.code, name: form.name })
-        .eq("id", editId);
-      if (err) { setError(err.message); setSaving(false); return; }
-    } else {
-      const { error: err } = await supabase.from("grants").insert(form);
-      if (err) { setError(err.message); setSaving(false); return; }
+    try {
+      if (editId) {
+        await callApi(`/api/admin/grants/${editId}`, "PUT", form);
+      } else {
+        await callApi("/api/admin/grants", "POST", form);
+      }
+      setShowForm(false);
+      setEditId(null);
+      setForm({ code: "", name: "" });
+      startTransition(() => router.refresh());
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSaving(false);
     }
-
-    setSaving(false);
-    setShowForm(false);
-    startTransition(() => router.refresh());
   }
 
   async function toggleActive(grant: Grant) {
     setTogglingId(grant.id);
-    await supabase.from("grants").update({ is_active: !grant.is_active }).eq("id", grant.id);
+    try {
+      await callApi(`/api/admin/grants/${grant.id}`, "PUT", { is_active: !grant.is_active });
+      startTransition(() => router.refresh());
+    } catch { /* ignore */ }
     setTogglingId(null);
-    startTransition(() => router.refresh());
   }
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-slate-800">Grants</h1>
+          <h1 className="text-xl font-bold text-slate-800">Grant Programs</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            {grants.filter((g) => g.is_active).length} active grants
+            {grants.filter((g) => g.is_active).length} active · {grants.filter((g) => !g.is_active).length} inactive
           </p>
         </div>
         <button
-          onClick={openAdd}
+          onClick={() => { setForm({ code: "", name: "" }); setEditId(null); setShowForm(true); setError(""); }}
           className="flex items-center gap-2 bg-[#1e3a5f] hover:bg-[#2d5a8e] text-white font-semibold px-4 py-2.5 rounded-xl transition-colors text-sm"
         >
           <Plus className="w-4 h-4" />
@@ -86,15 +88,11 @@ export default function AdminGrants({ grants }: Props) {
 
       {showForm && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-          <h2 className="font-semibold text-slate-800 mb-4">
-            {editId ? "Edit Grant" : "New Grant"}
-          </h2>
+          <h2 className="font-semibold text-slate-800 mb-4">{editId ? "Edit Grant" : "New Grant"}</h2>
           <form onSubmit={save} className="space-y-4">
             <div className="grid sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">
-                  Program Code
-                </label>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Program Code</label>
                 <input
                   required
                   value={form.code}
@@ -104,9 +102,7 @@ export default function AdminGrants({ grants }: Props) {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">
-                  Grant Name
-                </label>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Grant Name</label>
                 <input
                   required
                   value={form.name}
@@ -116,25 +112,15 @@ export default function AdminGrants({ grants }: Props) {
                 />
               </div>
             </div>
-
-            {error && (
-              <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>
-            )}
-
+            {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
             <div className="flex gap-2">
-              <button
-                type="submit"
-                disabled={saving}
-                className="flex items-center gap-2 bg-[#1e3a5f] text-white font-semibold px-5 py-2.5 rounded-xl disabled:opacity-60"
-              >
+              <button type="submit" disabled={saving}
+                className="flex items-center gap-2 bg-[#1e3a5f] text-white font-semibold px-5 py-2.5 rounded-xl disabled:opacity-60">
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                 Save
               </button>
-              <button
-                type="button"
-                onClick={() => setShowForm(false)}
-                className="flex items-center gap-2 bg-slate-100 text-slate-700 font-semibold px-5 py-2.5 rounded-xl hover:bg-slate-200"
-              >
+              <button type="button" onClick={() => setShowForm(false)}
+                className="flex items-center gap-2 bg-slate-100 text-slate-700 font-semibold px-5 py-2.5 rounded-xl hover:bg-slate-200">
                 <X className="w-4 h-4" />
                 Cancel
               </button>
@@ -159,12 +145,9 @@ export default function AdminGrants({ grants }: Props) {
                 </div>
               </div>
               <div className="flex items-center gap-1 ml-3">
-                <button
-                  onClick={() => toggleActive(grant)}
-                  disabled={togglingId === grant.id}
+                <button onClick={() => toggleActive(grant)} disabled={togglingId === grant.id}
                   className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                  title={grant.is_active ? "Deactivate" : "Activate"}
-                >
+                  title={grant.is_active ? "Deactivate" : "Activate"}>
                   {togglingId === grant.id ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
                   ) : grant.is_active ? (
@@ -173,10 +156,8 @@ export default function AdminGrants({ grants }: Props) {
                     <ToggleLeft className="w-5 h-5 text-slate-400" />
                   )}
                 </button>
-                <button
-                  onClick={() => openEdit(grant)}
-                  className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                >
+                <button onClick={() => openEdit(grant)}
+                  className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                   <Pencil className="w-4 h-4" />
                 </button>
               </div>
@@ -184,7 +165,7 @@ export default function AdminGrants({ grants }: Props) {
           ))}
           {grants.length === 0 && (
             <div className="px-5 py-8 text-center text-slate-400 text-sm">
-              No grants yet. Add your first grant above.
+              No grants yet. Add your first federal grant program above.
             </div>
           )}
         </div>

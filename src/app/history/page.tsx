@@ -1,55 +1,38 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import AppShell from "@/components/AppShell";
 import type { Employee, TimeEntry } from "@/types";
 import { CheckCircle, Clock, AlertCircle, FileText } from "lucide-react";
 
 function formatDate(d: string) {
   return new Date(d + "T00:00:00").toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
+    month: "short", day: "numeric", year: "numeric",
   });
 }
 
 const statusConfig: Record<string, { label: string; icon: React.ReactNode; className: string }> = {
-  draft: {
-    label: "Draft",
-    icon: <FileText className="w-4 h-4" />,
-    className: "bg-slate-100 text-slate-600",
-  },
-  submitted: {
-    label: "Pending Approval",
-    icon: <Clock className="w-4 h-4" />,
-    className: "bg-amber-100 text-amber-700",
-  },
-  approved: {
-    label: "Approved",
-    icon: <CheckCircle className="w-4 h-4" />,
-    className: "bg-green-100 text-green-700",
-  },
-  flagged: {
-    label: "Flagged",
-    icon: <AlertCircle className="w-4 h-4" />,
-    className: "bg-red-100 text-red-700",
-  },
+  draft: { label: "Draft", icon: <FileText className="w-4 h-4" />, className: "bg-slate-100 text-slate-600" },
+  submitted: { label: "Pending Approval", icon: <Clock className="w-4 h-4" />, className: "bg-amber-100 text-amber-700" },
+  approved: { label: "Approved", icon: <CheckCircle className="w-4 h-4" />, className: "bg-green-100 text-green-700" },
+  flagged: { label: "Flagged", icon: <AlertCircle className="w-4 h-4" />, className: "bg-red-100 text-red-700" },
 };
 
 export default async function HistoryPage() {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const { data: employee } = await supabase
+  const db = createAdminClient();
+
+  const { data: employee } = await db
     .from("employees")
     .select("*")
     .eq("email", user.email!)
     .single<Employee>();
   if (!employee) redirect("/login");
 
-  const { data: entries } = await supabase
+  const { data: entries } = await db
     .from("time_entries")
     .select("*, pay_period:pay_periods(*), lines:time_entry_lines(*, grant:grants(*))")
     .eq("employee_id", employee.id)
@@ -72,7 +55,6 @@ export default async function HistoryPage() {
           const pp = entry.pay_period;
           return (
             <div key={entry.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-              {/* Header */}
               <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
                 <div>
                   <p className="font-semibold text-slate-800">
@@ -84,15 +66,12 @@ export default async function HistoryPage() {
                     </p>
                   )}
                 </div>
-                <span
-                  className={`inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full ${sc.className}`}
-                >
+                <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full ${sc.className}`}>
                   {sc.icon}
                   {sc.label}
                 </span>
               </div>
 
-              {/* Lines table */}
               {entry.lines && entry.lines.length > 0 && (
                 <div className="px-5 py-3">
                   <table className="w-full text-sm">
@@ -107,11 +86,11 @@ export default async function HistoryPage() {
                       {entry.lines.map((line) => (
                         <tr key={line.id}>
                           <td className="py-1.5 text-slate-700">{line.grant?.name ?? "—"}</td>
-                          <td className="py-1.5 text-center font-semibold text-slate-800">
+                          <td className="py-1.5 text-center font-semibold text-slate-800 tabular-nums">
                             {line.actual_hours.toFixed(2)}
                           </td>
-                          <td className="py-1.5 text-center text-slate-500">
-                            {line.percent_time?.toFixed(2) ?? "—"}%
+                          <td className="py-1.5 text-center text-slate-500 tabular-nums">
+                            {line.percent_time != null ? `${Number(line.percent_time).toFixed(2)}%` : "—"}
                           </td>
                         </tr>
                       ))}

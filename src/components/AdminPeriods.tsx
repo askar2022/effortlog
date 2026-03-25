@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import type { PayPeriod } from "@/types";
 import { Plus, Check, X, Loader2, Lock, Unlock } from "lucide-react";
@@ -21,7 +20,6 @@ function formatDate(d: string) {
 
 export default function AdminPeriods({ periods }: Props) {
   const router = useRouter();
-  const supabase = createClient();
   const [, startTransition] = useTransition();
 
   const [showForm, setShowForm] = useState(false);
@@ -32,29 +30,42 @@ export default function AdminPeriods({ periods }: Props) {
 
   const today = new Date().toISOString().split("T")[0];
 
+  async function callApi(url: string, method: string, body?: unknown) {
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? "Request failed");
+    return data;
+  }
+
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setSaving(true);
-    const { error: err } = await supabase.from("pay_periods").insert({
-      ...form,
-      status: "open",
-    });
-    if (err) { setError(err.message); setSaving(false); return; }
-    setSaving(false);
-    setShowForm(false);
-    setForm({ start_date: "", end_date: "", due_date: "" });
-    startTransition(() => router.refresh());
+    try {
+      await callApi("/api/admin/periods", "POST", form);
+      setShowForm(false);
+      setForm({ start_date: "", end_date: "", due_date: "" });
+      startTransition(() => router.refresh());
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function toggleStatus(period: PayPeriod) {
     setTogglingId(period.id);
-    await supabase
-      .from("pay_periods")
-      .update({ status: period.status === "open" ? "closed" : "open" })
-      .eq("id", period.id);
+    try {
+      await callApi(`/api/admin/periods/${period.id}`, "PUT", {
+        status: period.status === "open" ? "closed" : "open",
+      });
+      startTransition(() => router.refresh());
+    } catch { /* ignore */ }
     setTogglingId(null);
-    startTransition(() => router.refresh());
   }
 
   return (
@@ -83,56 +94,32 @@ export default function AdminPeriods({ periods }: Props) {
             <div className="grid sm:grid-cols-3 gap-4">
               <div>
                 <label className="block text-xs font-medium text-slate-600 mb-1">Start Date</label>
-                <input
-                  type="date"
-                  required
-                  value={form.start_date}
+                <input type="date" required value={form.start_date}
                   onChange={(e) => setForm((f) => ({ ...f, start_date: e.target.value }))}
-                  className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                  className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-600 mb-1">End Date</label>
-                <input
-                  type="date"
-                  required
-                  value={form.end_date}
+                <input type="date" required value={form.end_date}
                   onChange={(e) => setForm((f) => ({ ...f, end_date: e.target.value }))}
-                  className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                  className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">
-                  Submission Due Date
-                </label>
-                <input
-                  type="date"
-                  required
-                  value={form.due_date}
+                <label className="block text-xs font-medium text-slate-600 mb-1">Submission Due</label>
+                <input type="date" required value={form.due_date}
                   onChange={(e) => setForm((f) => ({ ...f, due_date: e.target.value }))}
-                  className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                  className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
             </div>
-
-            {error && (
-              <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>
-            )}
-
+            {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
             <div className="flex gap-2">
-              <button
-                type="submit"
-                disabled={saving}
-                className="flex items-center gap-2 bg-[#1e3a5f] text-white font-semibold px-5 py-2.5 rounded-xl disabled:opacity-60"
-              >
+              <button type="submit" disabled={saving}
+                className="flex items-center gap-2 bg-[#1e3a5f] text-white font-semibold px-5 py-2.5 rounded-xl disabled:opacity-60">
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                 Save
               </button>
-              <button
-                type="button"
-                onClick={() => setShowForm(false)}
-                className="flex items-center gap-2 bg-slate-100 text-slate-700 font-semibold px-5 py-2.5 rounded-xl hover:bg-slate-200"
-              >
+              <button type="button" onClick={() => setShowForm(false)}
+                className="flex items-center gap-2 bg-slate-100 text-slate-700 font-semibold px-5 py-2.5 rounded-xl hover:bg-slate-200">
                 <X className="w-4 h-4" />
                 Cancel
               </button>
@@ -150,16 +137,13 @@ export default function AdminPeriods({ periods }: Props) {
         </div>
         <div className="divide-y divide-slate-100">
           {periods.map((period) => {
-            const isCurrent =
-              period.start_date <= today && period.end_date >= today;
+            const isCurrent = period.start_date <= today && period.end_date >= today;
             return (
-              <div
-                key={period.id}
+              <div key={period.id}
                 className={clsx(
                   "px-5 py-4 flex flex-col sm:grid sm:grid-cols-4 sm:items-center gap-2",
                   isCurrent && "bg-blue-50/50"
-                )}
-              >
+                )}>
                 <div>
                   <p className="font-medium text-slate-800">
                     {formatDate(period.start_date)} – {formatDate(period.end_date)}
@@ -169,34 +153,19 @@ export default function AdminPeriods({ periods }: Props) {
                   )}
                 </div>
                 <p className="text-sm text-slate-600">{formatDate(period.due_date)}</p>
-                <span
-                  className={clsx(
-                    "inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1 rounded-full w-fit",
-                    period.status === "open"
-                      ? "bg-green-100 text-green-700"
-                      : "bg-slate-100 text-slate-500"
-                  )}
-                >
-                  {period.status === "open" ? (
-                    <Unlock className="w-3 h-3" />
-                  ) : (
-                    <Lock className="w-3 h-3" />
-                  )}
+                <span className={clsx(
+                  "inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1 rounded-full w-fit",
+                  period.status === "open" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500"
+                )}>
+                  {period.status === "open" ? <Unlock className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
                   {period.status === "open" ? "Open" : "Closed"}
                 </span>
                 <div className="sm:text-right">
-                  <button
-                    onClick={() => toggleStatus(period)}
-                    disabled={togglingId === period.id}
-                    className="text-xs font-medium text-blue-600 hover:text-blue-800 disabled:opacity-40"
-                  >
+                  <button onClick={() => toggleStatus(period)} disabled={togglingId === period.id}
+                    className="text-xs font-medium text-blue-600 hover:text-blue-800 disabled:opacity-40">
                     {togglingId === period.id ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin inline" />
-                    ) : period.status === "open" ? (
-                      "Close Period"
-                    ) : (
-                      "Re-open"
-                    )}
+                    ) : period.status === "open" ? "Close Period" : "Re-open"}
                   </button>
                 </div>
               </div>
@@ -204,7 +173,7 @@ export default function AdminPeriods({ periods }: Props) {
           })}
           {periods.length === 0 && (
             <div className="px-5 py-8 text-center text-slate-400 text-sm">
-              No pay periods yet. Add one above or run the schema seed.
+              No pay periods yet. Add one above or check the schema seed.
             </div>
           )}
         </div>

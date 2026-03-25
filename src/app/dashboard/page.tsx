@@ -1,8 +1,9 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import AppShell from "@/components/AppShell";
 import TimecardForm from "@/components/TimecardForm";
-import type { Employee, PayPeriod, TimeEntry, TimeEntryLine, FundingAllocation } from "@/types";
+import type { Employee, PayPeriod, TimeEntry, TimeEntryLine, FundingAllocation, Grant } from "@/types";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -11,19 +12,23 @@ export default async function DashboardPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  // Get employee record
-  const { data: employee } = await supabase
+  // All DB reads go through the admin client (server-only)
+  const db = createAdminClient();
+
+  const { data: employee } = await db
     .from("employees")
     .select("*")
     .eq("email", user.email!)
+    .eq("is_active", true)
     .single<Employee>();
 
-  if (!employee || employee.role === "admin") redirect("/admin");
+  if (!employee) redirect("/login");
+  if (employee.role === "admin") redirect("/admin");
   if (employee.role === "supervisor") redirect("/supervisor");
 
-  // Get current open pay period
   const today = new Date().toISOString().split("T")[0];
-  const { data: payPeriod } = await supabase
+
+  const { data: payPeriod } = await db
     .from("pay_periods")
     .select("*")
     .lte("start_date", today)
@@ -31,19 +36,25 @@ export default async function DashboardPage() {
     .eq("status", "open")
     .single<PayPeriod>();
 
-  // Get employee's funding allocations (default hours per grant)
-  const { data: allocations } = await supabase
+  const { data: allocations } = await db
     .from("funding_allocations")
     .select("*, grant:grants(*)")
     .eq("employee_id", employee.id)
     .returns<FundingAllocation[]>();
 
+  // All active grants (so employee can optionally add one they worked on)
+  const { data: allGrants } = await db
+    .from("grants")
+    .select("*")
+    .eq("is_active", true)
+    .order("name")
+    .returns<Grant[]>();
+
   let entry: TimeEntry | null = null;
-  let lines: TimeEntryLine[] = [];
+  let entryLines: TimeEntryLine[] = [];
 
   if (payPeriod) {
-    // Try to get existing entry for this period
-    const { data: existingEntry } = await supabase
+    const { data: existingEntry } = await db
       .from("time_entries")
       .select("*")
       .eq("employee_id", employee.id)
@@ -52,12 +63,12 @@ export default async function DashboardPage() {
 
     if (existingEntry) {
       entry = existingEntry;
-      const { data: entryLines } = await supabase
+      const { data: lines } = await db
         .from("time_entry_lines")
         .select("*, grant:grants(*)")
         .eq("time_entry_id", existingEntry.id)
         .returns<TimeEntryLine[]>();
-      lines = entryLines ?? [];
+      entryLines = lines ?? [];
     }
   }
 
@@ -68,8 +79,9 @@ export default async function DashboardPage() {
           employee={employee}
           payPeriod={payPeriod ?? null}
           allocations={allocations ?? []}
+          allGrants={allGrants ?? []}
           entry={entry}
-          lines={lines}
+          lines={entryLines}
         />
       </div>
     </AppShell>

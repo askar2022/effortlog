@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import AppShell from "@/components/AppShell";
 import SupervisorDashboard from "@/components/SupervisorDashboard";
 import type { Employee, PayPeriod, TimeEntry } from "@/types";
@@ -11,18 +12,21 @@ export default async function SupervisorPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const { data: supervisor } = await supabase
+  const db = createAdminClient();
+
+  const { data: supervisor } = await db
     .from("employees")
     .select("*")
     .eq("email", user.email!)
+    .eq("is_active", true)
     .single<Employee>();
 
   if (!supervisor) redirect("/login");
   if (supervisor.role === "staff") redirect("/dashboard");
 
-  // Get current open pay period
   const today = new Date().toISOString().split("T")[0];
-  const { data: payPeriod } = await supabase
+
+  const { data: payPeriod } = await db
     .from("pay_periods")
     .select("*")
     .lte("start_date", today)
@@ -30,41 +34,38 @@ export default async function SupervisorPage() {
     .eq("status", "open")
     .single<PayPeriod>();
 
-  // Get all pay periods for the filter
-  const { data: allPeriods } = await supabase
+  const { data: allPeriods } = await db
     .from("pay_periods")
     .select("*")
     .order("start_date", { ascending: false })
     .limit(12)
     .returns<PayPeriod[]>();
 
-  // Get staff under this supervisor (or all staff if admin)
-  const staffQuery = supabase
+  // Get staff under this supervisor (admins see all)
+  const staffQuery = db
     .from("employees")
     .select("*")
     .eq("role", "staff")
     .eq("is_active", true);
-
   if (supervisor.role === "supervisor") {
     staffQuery.eq("supervisor_id", supervisor.id);
   }
-
   const { data: staffList } = await staffQuery.returns<Employee[]>();
   const staffIds = (staffList ?? []).map((s) => s.id);
 
-  // Get entries for current period
   let entries: TimeEntry[] = [];
   if (payPeriod && staffIds.length) {
-    const { data } = await supabase
+    const { data } = await db
       .from("time_entries")
-      .select("*, employee:employees(*), lines:time_entry_lines(*, grant:grants(*))")
+      .select(
+        "*, employee:employees!time_entries_employee_id_fkey(*), lines:time_entry_lines(*, grant:grants(*))"
+      )
       .eq("pay_period_id", payPeriod.id)
       .in("employee_id", staffIds)
       .returns<TimeEntry[]>();
     entries = data ?? [];
   }
 
-  // Build complete list including staff with no entry yet
   const entryEmployeeIds = new Set(entries.map((e) => e.employee_id));
   const missingStaff = (staffList ?? []).filter((s) => !entryEmployeeIds.has(s.id));
 

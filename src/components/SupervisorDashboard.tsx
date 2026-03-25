@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import type { Employee, PayPeriod, TimeEntry } from "@/types";
 import {
@@ -36,84 +35,75 @@ function formatDate(d: string) {
 }
 
 export default function SupervisorDashboard({
-  supervisor,
   payPeriod,
   entries,
   missingStaff,
 }: Props) {
   const router = useRouter();
-  const supabase = createClient();
   const [, startTransition] = useTransition();
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [bulkLoading, setBulkLoading] = useState(false);
-  const [flagNote, setFlagNote] = useState<Record<string, string>>({});
+  const [flagNotes, setFlagNotes] = useState<Record<string, string>>({});
+  const [apiError, setApiError] = useState("");
 
   const submitted = entries.filter((e) => e.status === "submitted");
   const approved = entries.filter((e) => e.status === "approved");
   const flagged = entries.filter((e) => e.status === "flagged");
 
-  async function approveEntry(entryId: string) {
-    setActionLoading(entryId);
-    await supabase
-      .from("time_entries")
-      .update({
-        status: "approved",
-        approved_at: new Date().toISOString(),
-        approved_by: supervisor.id,
-      })
-      .eq("id", entryId);
-
-    await supabase.from("audit_log").insert({
-      time_entry_id: entryId,
-      actor_id: supervisor.id,
-      action: "approved",
+  async function callApi(url: string, body?: Record<string, unknown>) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
     });
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.error ?? "Request failed");
+    }
+    return res.json();
+  }
 
-    setActionLoading(null);
-    startTransition(() => router.refresh());
+  async function approveEntry(entryId: string) {
+    setApiError("");
+    setActionLoading(entryId);
+    try {
+      await callApi(`/api/entries/${entryId}/approve`);
+      startTransition(() => router.refresh());
+    } catch (e: unknown) {
+      setApiError(e instanceof Error ? e.message : "Failed to approve");
+    } finally {
+      setActionLoading(null);
+    }
   }
 
   async function flagEntry(entryId: string) {
+    setApiError("");
     setActionLoading(entryId + "-flag");
-    await supabase
-      .from("time_entries")
-      .update({ status: "flagged", notes: flagNote[entryId] || undefined })
-      .eq("id", entryId);
-
-    await supabase.from("audit_log").insert({
-      time_entry_id: entryId,
-      actor_id: supervisor.id,
-      action: "flagged",
-      new_data: { note: flagNote[entryId] },
-    });
-
-    setActionLoading(null);
-    startTransition(() => router.refresh());
+    try {
+      await callApi(`/api/entries/${entryId}/flag`, { note: flagNotes[entryId] ?? "" });
+      startTransition(() => router.refresh());
+    } catch (e: unknown) {
+      setApiError(e instanceof Error ? e.message : "Failed to flag");
+    } finally {
+      setActionLoading(null);
+    }
   }
 
   async function approveAll() {
+    setApiError("");
     setBulkLoading(true);
-    const ids = submitted.map((e) => e.id);
-    await supabase
-      .from("time_entries")
-      .update({
-        status: "approved",
-        approved_at: new Date().toISOString(),
-        approved_by: supervisor.id,
-      })
-      .in("id", ids);
-
-    for (const id of ids) {
-      await supabase.from("audit_log").insert({
-        time_entry_id: id,
-        actor_id: supervisor.id,
-        action: "approved",
+    try {
+      await callApi("/api/entries/approve-all", {
+        entry_ids: submitted.map((e) => e.id),
       });
+      startTransition(() => router.refresh());
+    } catch (e: unknown) {
+      setApiError(e instanceof Error ? e.message : "Failed to approve all");
+    } finally {
+      setBulkLoading(false);
     }
-    setBulkLoading(false);
-    startTransition(() => router.refresh());
   }
 
   if (!payPeriod) {
@@ -138,20 +128,46 @@ export default function SupervisorDashboard({
           {formatDate(payPeriod.start_date)} – {formatDate(payPeriod.end_date)}
         </p>
         <p className="text-blue-200 text-sm mt-1">
-          Due: <span className="font-semibold text-white">{formatDate(payPeriod.due_date)}</span>
+          Due:{" "}
+          <span className="font-semibold text-white">{formatDate(payPeriod.due_date)}</span>
         </p>
       </div>
 
-      {/* Stats */}
+      {/* Stats cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: "Total Staff", value: totalStaff, icon: <Users className="w-5 h-5" />, color: "text-slate-600 bg-slate-100" },
-          { label: "Submitted", value: submitted.length, icon: <Clock className="w-5 h-5" />, color: "text-amber-600 bg-amber-100" },
-          { label: "Approved", value: approved.length, icon: <CheckCircle className="w-5 h-5" />, color: "text-green-600 bg-green-100" },
-          { label: "Missing", value: missingStaff.length, icon: <AlertCircle className="w-5 h-5" />, color: "text-red-600 bg-red-100" },
+          {
+            label: "Total Staff",
+            value: totalStaff,
+            icon: <Users className="w-5 h-5" />,
+            color: "text-slate-600 bg-slate-100",
+          },
+          {
+            label: "Submitted",
+            value: submitted.length,
+            icon: <Clock className="w-5 h-5" />,
+            color: "text-amber-600 bg-amber-100",
+          },
+          {
+            label: "Approved",
+            value: approved.length,
+            icon: <CheckCircle className="w-5 h-5" />,
+            color: "text-green-600 bg-green-100",
+          },
+          {
+            label: "Missing",
+            value: missingStaff.length,
+            icon: <AlertCircle className="w-5 h-5" />,
+            color: "text-red-600 bg-red-100",
+          },
         ].map((stat) => (
-          <div key={stat.label} className="bg-white rounded-xl border border-slate-200 p-4 flex flex-col gap-2">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${stat.color}`}>
+          <div
+            key={stat.label}
+            className="bg-white rounded-xl border border-slate-200 p-4 flex flex-col gap-2"
+          >
+            <div
+              className={`w-8 h-8 rounded-lg flex items-center justify-center ${stat.color}`}
+            >
               {stat.icon}
             </div>
             <p className="text-2xl font-bold text-slate-800">{stat.value}</p>
@@ -160,6 +176,13 @@ export default function SupervisorDashboard({
         ))}
       </div>
 
+      {/* API error */}
+      {apiError && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700">
+          {apiError}
+        </div>
+      )}
+
       {/* Bulk Approve */}
       {submitted.length > 0 && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -167,7 +190,9 @@ export default function SupervisorDashboard({
             <p className="font-semibold text-blue-900">
               {submitted.length} timecard{submitted.length !== 1 ? "s" : ""} ready to approve
             </p>
-            <p className="text-sm text-blue-700 mt-0.5">All hours look correct? Approve all at once.</p>
+            <p className="text-sm text-blue-700 mt-0.5">
+              All hours look correct? Approve all at once.
+            </p>
           </div>
           <button
             onClick={approveAll}
@@ -184,7 +209,7 @@ export default function SupervisorDashboard({
         </div>
       )}
 
-      {/* Staff Table */}
+      {/* Staff table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
           <h2 className="font-semibold text-slate-800">Staff Timecards</h2>
@@ -192,45 +217,55 @@ export default function SupervisorDashboard({
         </div>
 
         <div className="divide-y divide-slate-100">
-          {/* Submitted entries */}
-          {submitted.map((entry) => (
-            <EntryRow
-              key={entry.id}
-              entry={entry}
-              expanded={expandedId === entry.id}
-              onToggle={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
-              onApprove={() => approveEntry(entry.id)}
-              onFlag={() => flagEntry(entry.id)}
-              approveLoading={actionLoading === entry.id}
-              flagLoading={actionLoading === entry.id + "-flag"}
-              flagNote={flagNote[entry.id] ?? ""}
-              onFlagNoteChange={(v) => setFlagNote((prev) => ({ ...prev, [entry.id]: v }))}
-            />
-          ))}
-
-          {/* Flagged entries */}
+          {/* Flagged — needs attention first */}
           {flagged.map((entry) => (
             <EntryRow
               key={entry.id}
               entry={entry}
               expanded={expandedId === entry.id}
-              onToggle={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
+              onToggle={() =>
+                setExpandedId(expandedId === entry.id ? null : entry.id)
+              }
               onApprove={() => approveEntry(entry.id)}
               onFlag={() => flagEntry(entry.id)}
               approveLoading={actionLoading === entry.id}
               flagLoading={actionLoading === entry.id + "-flag"}
-              flagNote={flagNote[entry.id] ?? ""}
-              onFlagNoteChange={(v) => setFlagNote((prev) => ({ ...prev, [entry.id]: v }))}
+              flagNote={flagNotes[entry.id] ?? ""}
+              onFlagNoteChange={(v) =>
+                setFlagNotes((p) => ({ ...p, [entry.id]: v }))
+              }
             />
           ))}
 
-          {/* Approved entries */}
+          {/* Submitted — waiting for action */}
+          {submitted.map((entry) => (
+            <EntryRow
+              key={entry.id}
+              entry={entry}
+              expanded={expandedId === entry.id}
+              onToggle={() =>
+                setExpandedId(expandedId === entry.id ? null : entry.id)
+              }
+              onApprove={() => approveEntry(entry.id)}
+              onFlag={() => flagEntry(entry.id)}
+              approveLoading={actionLoading === entry.id}
+              flagLoading={actionLoading === entry.id + "-flag"}
+              flagNote={flagNotes[entry.id] ?? ""}
+              onFlagNoteChange={(v) =>
+                setFlagNotes((p) => ({ ...p, [entry.id]: v }))
+              }
+            />
+          ))}
+
+          {/* Approved — read-only */}
           {approved.map((entry) => (
             <EntryRow
               key={entry.id}
               entry={entry}
               expanded={expandedId === entry.id}
-              onToggle={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
+              onToggle={() =>
+                setExpandedId(expandedId === entry.id ? null : entry.id)
+              }
               onApprove={() => {}}
               onFlag={() => {}}
               approveLoading={false}
@@ -242,7 +277,10 @@ export default function SupervisorDashboard({
 
           {/* Missing staff */}
           {missingStaff.map((staff) => (
-            <div key={staff.id} className="flex items-center justify-between px-5 py-4">
+            <div
+              key={staff.id}
+              className="flex items-center justify-between px-5 py-4"
+            >
               <div>
                 <p className="font-medium text-slate-700">{staff.full_name}</p>
                 <p className="text-xs text-slate-400">{staff.email}</p>
@@ -264,6 +302,8 @@ export default function SupervisorDashboard({
     </div>
   );
 }
+
+// ─── Entry row component ────────────────────────────────────────────────────
 
 interface EntryRowProps {
   entry: TimeEntry;
@@ -291,7 +331,9 @@ function EntryRow({
   const isApproved = entry.status === "approved";
   const isFlagged = entry.status === "flagged";
   const totalHours = (entry.lines ?? []).reduce((s, l) => s + l.actual_hours, 0);
-  const hasChanges = (entry.lines ?? []).some((l) => l.actual_hours !== l.default_hours);
+  const hasChanges = (entry.lines ?? []).some(
+    (l) => l.actual_hours !== l.default_hours
+  );
 
   return (
     <div>
@@ -299,21 +341,32 @@ function EntryRow({
         className="w-full flex items-center justify-between px-5 py-4 hover:bg-slate-50 transition-colors text-left"
         onClick={onToggle}
       >
-        <div className="flex items-center gap-3">
-          <div>
-            <p className="font-medium text-slate-800">{entry.employee?.full_name ?? "—"}</p>
-            <p className="text-xs text-slate-400">{entry.employee?.email ?? "—"}</p>
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="min-w-0">
+            <p className="font-medium text-slate-800 truncate">
+              {entry.employee?.full_name ?? "—"}
+            </p>
+            <p className="text-xs text-slate-400 truncate">
+              {entry.employee?.email ?? "—"}
+            </p>
           </div>
           {hasChanges && !isApproved && (
-            <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
+            <span className="shrink-0 text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
               Hours changed
+            </span>
+          )}
+          {isFlagged && (
+            <span className="shrink-0 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">
+              Flagged
             </span>
           )}
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 ml-3 shrink-0">
           <div className="text-right">
-            <p className="font-bold text-slate-800">{totalHours.toFixed(1)} hrs</p>
+            <p className="font-bold text-slate-800 tabular-nums">
+              {totalHours.toFixed(1)} hrs
+            </p>
             <StatusPill status={entry.status} />
           </div>
           {expanded ? (
@@ -324,47 +377,79 @@ function EntryRow({
         </div>
       </button>
 
-      {/* Expanded detail */}
       {expanded && (
         <div className="border-t border-slate-100 bg-slate-50 px-5 py-4 space-y-4">
           {/* Lines table */}
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-xs text-slate-400">
-                <th className="text-left pb-2 font-medium">Program / Grant</th>
-                <th className="text-center pb-2 font-medium w-24">Default</th>
-                <th className="text-center pb-2 font-medium w-24">Actual</th>
-                <th className="text-center pb-2 font-medium w-20">%</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {(entry.lines ?? []).map((line) => (
-                <tr key={line.id}>
-                  <td className="py-2 text-slate-700">{line.grant?.name ?? "—"}</td>
-                  <td className="py-2 text-center text-slate-500">{line.default_hours.toFixed(2)}</td>
-                  <td className="py-2 text-center">
-                    <span
-                      className={clsx(
-                        "font-semibold",
-                        line.actual_hours !== line.default_hours ? "text-amber-600" : "text-slate-800"
-                      )}
-                    >
-                      {line.actual_hours.toFixed(2)}
-                    </span>
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 border-b border-slate-100">
+                <tr className="text-xs text-slate-500">
+                  <th className="text-left px-4 py-2.5 font-medium">Program / Grant</th>
+                  <th className="text-center px-3 py-2.5 font-medium w-24">Default</th>
+                  <th className="text-center px-3 py-2.5 font-medium w-24">Actual</th>
+                  <th className="text-center px-3 py-2.5 font-medium w-20">%</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {(entry.lines ?? []).map((line) => (
+                  <tr key={line.id}>
+                    <td className="px-4 py-2.5">
+                      <p className="text-slate-700 font-medium">
+                        {line.grant?.name ?? "—"}
+                      </p>
+                      <p className="text-xs text-slate-400 font-mono">
+                        {line.grant?.code ?? ""}
+                      </p>
+                    </td>
+                    <td className="px-3 py-2.5 text-center text-slate-500 tabular-nums">
+                      {line.default_hours > 0 ? line.default_hours.toFixed(2) : "—"}
+                    </td>
+                    <td className="px-3 py-2.5 text-center tabular-nums">
+                      <span
+                        className={clsx(
+                          "font-semibold",
+                          line.actual_hours !== line.default_hours && line.default_hours > 0
+                            ? "text-amber-600"
+                            : "text-slate-800"
+                        )}
+                      >
+                        {line.actual_hours.toFixed(2)}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-center text-slate-500 tabular-nums">
+                      {line.percent_time != null ? `${Number(line.percent_time).toFixed(2)}%` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="border-t border-slate-200 bg-slate-50">
+                <tr>
+                  <td className="px-4 py-2 font-bold text-slate-700">Total</td>
+                  <td />
+                  <td className="px-3 py-2 text-center font-bold text-slate-800 tabular-nums">
+                    {totalHours.toFixed(2)}
                   </td>
-                  <td className="py-2 text-center text-slate-500">
-                    {line.percent_time?.toFixed(2) ?? "—"}%
+                  <td className="px-3 py-2 text-center text-xs font-bold text-green-700">
+                    100%
                   </td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </tfoot>
+            </table>
+          </div>
 
+          {/* Employee note */}
           {entry.notes && (
             <div className="flex gap-2 text-sm text-slate-600 bg-white rounded-lg border border-slate-200 p-3">
               <MessageSquare className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
               <span>{entry.notes}</span>
             </div>
+          )}
+
+          {/* Submission date */}
+          {entry.submitted_at && (
+            <p className="text-xs text-slate-400">
+              Submitted: {formatDate(entry.submitted_at.split("T")[0])}
+            </p>
           )}
 
           {/* Actions */}
@@ -383,33 +468,27 @@ function EntryRow({
                   )}
                   Approve
                 </button>
-                {!isFlagged && (
-                  <button
-                    onClick={onFlag}
-                    disabled={flagLoading}
-                    className="flex-1 flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-semibold py-2.5 rounded-xl transition-colors disabled:opacity-60"
-                  >
-                    {flagLoading ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Flag className="w-4 h-4" />
-                    )}
-                    Flag
-                  </button>
-                )}
+                <button
+                  onClick={onFlag}
+                  disabled={flagLoading}
+                  className="flex-1 flex items-center justify-center gap-2 bg-white border border-red-200 hover:bg-red-50 text-red-600 font-semibold py-2.5 rounded-xl transition-colors disabled:opacity-60"
+                >
+                  {flagLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Flag className="w-4 h-4" />
+                  )}
+                  Flag
+                </button>
               </div>
 
-              {!isFlagged && (
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Add note for employee (optional)…"
-                    value={flagNote}
-                    onChange={(e) => onFlagNoteChange(e.target.value)}
-                    className="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-              )}
+              <input
+                type="text"
+                placeholder="Add note for employee (shown when flagged)…"
+                value={flagNote}
+                onChange={(e) => onFlagNoteChange(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+              />
             </div>
           )}
 
@@ -417,7 +496,9 @@ function EntryRow({
             <div className="flex items-center gap-2 text-green-700 text-sm font-medium">
               <CheckCircle className="w-4 h-4" />
               Approved{" "}
-              {entry.approved_at ? formatDate(entry.approved_at.split("T")[0]) : ""}
+              {entry.approved_at
+                ? formatDate(entry.approved_at.split("T")[0])
+                : ""}
             </div>
           )}
         </div>

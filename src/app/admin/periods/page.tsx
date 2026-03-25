@@ -1,17 +1,18 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import AppShell from "@/components/AppShell";
 import AdminPeriods from "@/components/AdminPeriods";
 import type { Employee, PayPeriod } from "@/types";
 
 export default async function AdminPeriodsPage() {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const { data: admin } = await supabase
+  const db = createAdminClient();
+
+  const { data: admin } = await db
     .from("employees")
     .select("*")
     .eq("email", user.email!)
@@ -19,7 +20,7 @@ export default async function AdminPeriodsPage() {
 
   if (!admin || admin.role !== "admin") redirect("/dashboard");
 
-  const { data: periods } = await supabase
+  const { data: periods } = await db
     .from("pay_periods")
     .select("*")
     .order("start_date", { ascending: false })
