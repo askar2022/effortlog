@@ -5,15 +5,16 @@ import { useRouter } from "next/navigation";
 import type { Employee, PayPeriod, TimeEntry } from "@/types";
 import {
   CheckCircle,
-  Clock,
   AlertCircle,
   Users,
   CheckCheck,
-  ChevronDown,
-  ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   MessageSquare,
   Loader2,
   Flag,
+  ShieldCheck,
+  Clock,
 } from "lucide-react";
 import clsx from "clsx";
 
@@ -34,23 +35,33 @@ function formatDate(d: string) {
   });
 }
 
-export default function SupervisorDashboard({
-  payPeriod,
-  entries,
-  missingStaff,
-}: Props) {
+function formatDateLong(d: string) {
+  return new Date(d + "T00:00:00").toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+export default function SupervisorDashboard({ payPeriod, entries, missingStaff }: Props) {
   const router = useRouter();
   const [, startTransition] = useTransition();
 
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Detail view: which entry are we reviewing?
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [bulkLoading, setBulkLoading] = useState(false);
-  const [flagNotes, setFlagNotes] = useState<Record<string, string>>({});
+  const [flagNote, setFlagNote] = useState("");
+  const [showFlagInput, setShowFlagInput] = useState(false);
   const [apiError, setApiError] = useState("");
 
   const submitted = entries.filter((e) => e.status === "submitted");
   const approved = entries.filter((e) => e.status === "approved");
   const flagged = entries.filter((e) => e.status === "flagged");
+
+  // All entries that need action (submitted + flagged), then approved at end
+  const reviewList = [...flagged, ...submitted, ...approved];
+  const selectedEntry = selectedIdx !== null ? reviewList[selectedIdx] ?? null : null;
 
   async function callApi(url: string, body?: Record<string, unknown>) {
     const res = await fetch(url, {
@@ -70,6 +81,14 @@ export default function SupervisorDashboard({
     setActionLoading(entryId);
     try {
       await callApi(`/api/entries/${entryId}/approve`);
+      // Advance to next
+      if (selectedIdx !== null && selectedIdx < reviewList.length - 1) {
+        setSelectedIdx(selectedIdx + 1);
+      } else {
+        setSelectedIdx(null);
+      }
+      setShowFlagInput(false);
+      setFlagNote("");
       startTransition(() => router.refresh());
     } catch (e: unknown) {
       setApiError(e instanceof Error ? e.message : "Failed to approve");
@@ -82,7 +101,9 @@ export default function SupervisorDashboard({
     setApiError("");
     setActionLoading(entryId + "-flag");
     try {
-      await callApi(`/api/entries/${entryId}/flag`, { note: flagNotes[entryId] ?? "" });
+      await callApi(`/api/entries/${entryId}/flag`, { note: flagNote });
+      setShowFlagInput(false);
+      setFlagNote("");
       startTransition(() => router.refresh());
     } catch (e: unknown) {
       setApiError(e instanceof Error ? e.message : "Failed to flag");
@@ -95,9 +116,8 @@ export default function SupervisorDashboard({
     setApiError("");
     setBulkLoading(true);
     try {
-      await callApi("/api/entries/approve-all", {
-        entry_ids: submitted.map((e) => e.id),
-      });
+      await callApi("/api/entries/approve-all", { entry_ids: submitted.map((e) => e.id) });
+      setSelectedIdx(null);
       startTransition(() => router.refresh());
     } catch (e: unknown) {
       setApiError(e instanceof Error ? e.message : "Failed to approve all");
@@ -106,6 +126,7 @@ export default function SupervisorDashboard({
     }
   }
 
+  // ── No active period ────────────────────────────────────────────────────────
   if (!payPeriod) {
     return (
       <div className="bg-amber-50 border border-amber-200 rounded-2xl p-6 flex gap-3 items-start">
@@ -117,9 +138,33 @@ export default function SupervisorDashboard({
 
   const totalStaff = entries.length + missingStaff.length;
 
+  // ── Detail view (reviewing one entry) ───────────────────────────────────────
+  if (selectedEntry !== null && selectedIdx !== null) {
+    return (
+      <ApprovalDetail
+        entry={selectedEntry}
+        payPeriod={payPeriod}
+        idx={selectedIdx}
+        total={reviewList.length}
+        flagNote={flagNote}
+        showFlagInput={showFlagInput}
+        actionLoading={actionLoading}
+        apiError={apiError}
+        onBack={() => { setSelectedIdx(null); setShowFlagInput(false); setFlagNote(""); }}
+        onPrev={() => { setSelectedIdx(Math.max(0, selectedIdx - 1)); setShowFlagInput(false); setFlagNote(""); setApiError(""); }}
+        onNext={() => { setSelectedIdx(Math.min(reviewList.length - 1, selectedIdx + 1)); setShowFlagInput(false); setFlagNote(""); setApiError(""); }}
+        onApprove={() => approveEntry(selectedEntry.id)}
+        onFlagToggle={() => setShowFlagInput((v) => !v)}
+        onFlagNoteChange={setFlagNote}
+        onFlagSubmit={() => flagEntry(selectedEntry.id)}
+      />
+    );
+  }
+
+  // ── List view ───────────────────────────────────────────────────────────────
   return (
     <div className="space-y-5">
-      {/* Header */}
+      {/* Period header */}
       <div className="bg-[#1e3a5f] text-white rounded-2xl p-5">
         <p className="text-blue-300 text-xs font-medium uppercase tracking-wider mb-1">
           Current Pay Period
@@ -133,57 +178,27 @@ export default function SupervisorDashboard({
         </p>
       </div>
 
-      {/* Stats cards */}
+      {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          {
-            label: "Total Staff",
-            value: totalStaff,
-            icon: <Users className="w-5 h-5" />,
-            color: "text-slate-600 bg-slate-100",
-          },
-          {
-            label: "Submitted",
-            value: submitted.length,
-            icon: <Clock className="w-5 h-5" />,
-            color: "text-amber-600 bg-amber-100",
-          },
-          {
-            label: "Approved",
-            value: approved.length,
-            icon: <CheckCircle className="w-5 h-5" />,
-            color: "text-green-600 bg-green-100",
-          },
-          {
-            label: "Missing",
-            value: missingStaff.length,
-            icon: <AlertCircle className="w-5 h-5" />,
-            color: "text-red-600 bg-red-100",
-          },
-        ].map((stat) => (
-          <div
-            key={stat.label}
-            className="bg-white rounded-xl border border-slate-200 p-4 flex flex-col gap-2"
-          >
-            <div
-              className={`w-8 h-8 rounded-lg flex items-center justify-center ${stat.color}`}
-            >
-              {stat.icon}
-            </div>
-            <p className="text-2xl font-bold text-slate-800">{stat.value}</p>
-            <p className="text-xs text-slate-500">{stat.label}</p>
+          { label: "Total Staff", value: totalStaff, color: "text-slate-600 bg-slate-100", icon: <Users className="w-5 h-5" /> },
+          { label: "Submitted", value: submitted.length, color: "text-amber-600 bg-amber-100", icon: <Clock className="w-5 h-5" /> },
+          { label: "Approved", value: approved.length, color: "text-green-600 bg-green-100", icon: <CheckCircle className="w-5 h-5" /> },
+          { label: "Missing", value: missingStaff.length, color: "text-red-600 bg-red-100", icon: <AlertCircle className="w-5 h-5" /> },
+        ].map((s) => (
+          <div key={s.label} className="bg-white rounded-xl border border-slate-200 p-4 flex flex-col gap-2">
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${s.color}`}>{s.icon}</div>
+            <p className="text-2xl font-bold text-slate-800">{s.value}</p>
+            <p className="text-xs text-slate-500">{s.label}</p>
           </div>
         ))}
       </div>
 
-      {/* API error */}
       {apiError && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700">
-          {apiError}
-        </div>
+        <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700">{apiError}</div>
       )}
 
-      {/* Bulk Approve */}
+      {/* Bulk approve */}
       {submitted.length > 0 && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
@@ -199,91 +214,62 @@ export default function SupervisorDashboard({
             disabled={bulkLoading}
             className="flex items-center gap-2 bg-[#1e3a5f] hover:bg-[#2d5a8e] text-white font-semibold px-5 py-2.5 rounded-xl transition-colors disabled:opacity-60 whitespace-nowrap"
           >
-            {bulkLoading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <CheckCheck className="w-4 h-4" />
-            )}
+            {bulkLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCheck className="w-4 h-4" />}
             Approve All ({submitted.length})
           </button>
         </div>
       )}
 
-      {/* Staff table */}
+      {/* Staff list */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
           <h2 className="font-semibold text-slate-800">Staff Timecards</h2>
           <span className="text-xs text-slate-400">{totalStaff} employees</span>
         </div>
-
         <div className="divide-y divide-slate-100">
-          {/* Flagged — needs attention first */}
-          {flagged.map((entry) => (
-            <EntryRow
-              key={entry.id}
-              entry={entry}
-              expanded={expandedId === entry.id}
-              onToggle={() =>
-                setExpandedId(expandedId === entry.id ? null : entry.id)
-              }
-              onApprove={() => approveEntry(entry.id)}
-              onFlag={() => flagEntry(entry.id)}
-              approveLoading={actionLoading === entry.id}
-              flagLoading={actionLoading === entry.id + "-flag"}
-              flagNote={flagNotes[entry.id] ?? ""}
-              onFlagNoteChange={(v) =>
-                setFlagNotes((p) => ({ ...p, [entry.id]: v }))
-              }
-            />
-          ))}
+          {reviewList.map((entry, idx) => {
+            const totalHours = (entry.lines ?? []).reduce((s, l) => s + l.actual_hours, 0);
+            const hasChanges = (entry.lines ?? []).some((l) => l.actual_hours !== l.default_hours);
+            return (
+              <button
+                key={entry.id}
+                onClick={() => setSelectedIdx(idx)}
+                className="w-full flex items-center justify-between px-5 py-4 hover:bg-slate-50 transition-colors text-left"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <StatusDot status={entry.status} />
+                  <div className="min-w-0">
+                    <p className="font-medium text-slate-800 truncate">
+                      {entry.employee?.full_name ?? "—"}
+                    </p>
+                    <p className="text-xs text-slate-400 truncate">{entry.employee?.email ?? "—"}</p>
+                  </div>
+                  {hasChanges && entry.status !== "approved" && (
+                    <span className="shrink-0 text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
+                      Hours changed
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 ml-3 shrink-0">
+                  <div className="text-right">
+                    <p className="font-bold text-slate-800 tabular-nums">{totalHours.toFixed(1)} hrs</p>
+                    <StatusLabel status={entry.status} />
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-300" />
+                </div>
+              </button>
+            );
+          })}
 
-          {/* Submitted — waiting for action */}
-          {submitted.map((entry) => (
-            <EntryRow
-              key={entry.id}
-              entry={entry}
-              expanded={expandedId === entry.id}
-              onToggle={() =>
-                setExpandedId(expandedId === entry.id ? null : entry.id)
-              }
-              onApprove={() => approveEntry(entry.id)}
-              onFlag={() => flagEntry(entry.id)}
-              approveLoading={actionLoading === entry.id}
-              flagLoading={actionLoading === entry.id + "-flag"}
-              flagNote={flagNotes[entry.id] ?? ""}
-              onFlagNoteChange={(v) =>
-                setFlagNotes((p) => ({ ...p, [entry.id]: v }))
-              }
-            />
-          ))}
-
-          {/* Approved — read-only */}
-          {approved.map((entry) => (
-            <EntryRow
-              key={entry.id}
-              entry={entry}
-              expanded={expandedId === entry.id}
-              onToggle={() =>
-                setExpandedId(expandedId === entry.id ? null : entry.id)
-              }
-              onApprove={() => {}}
-              onFlag={() => {}}
-              approveLoading={false}
-              flagLoading={false}
-              flagNote=""
-              onFlagNoteChange={() => {}}
-            />
-          ))}
-
-          {/* Missing staff */}
+          {/* Missing staff (not clickable — no entry yet) */}
           {missingStaff.map((staff) => (
-            <div
-              key={staff.id}
-              className="flex items-center justify-between px-5 py-4"
-            >
-              <div>
-                <p className="font-medium text-slate-700">{staff.full_name}</p>
-                <p className="text-xs text-slate-400">{staff.email}</p>
+            <div key={staff.id} className="flex items-center justify-between px-5 py-4">
+              <div className="flex items-center gap-3">
+                <div className="w-2 h-2 rounded-full bg-red-400 shrink-0" />
+                <div>
+                  <p className="font-medium text-slate-700">{staff.full_name}</p>
+                  <p className="text-xs text-slate-400">{staff.email}</p>
+                </div>
               </div>
               <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-red-100 text-red-600">
                 <AlertCircle className="w-3.5 h-3.5" />
@@ -303,211 +289,348 @@ export default function SupervisorDashboard({
   );
 }
 
-// ─── Entry row component ────────────────────────────────────────────────────
+// ── Approval Detail View ─────────────────────────────────────────────────────
 
-interface EntryRowProps {
+interface DetailProps {
   entry: TimeEntry;
-  expanded: boolean;
-  onToggle: () => void;
-  onApprove: () => void;
-  onFlag: () => void;
-  approveLoading: boolean;
-  flagLoading: boolean;
+  payPeriod: PayPeriod;
+  idx: number;
+  total: number;
   flagNote: string;
+  showFlagInput: boolean;
+  actionLoading: string | null;
+  apiError: string;
+  onBack: () => void;
+  onPrev: () => void;
+  onNext: () => void;
+  onApprove: () => void;
+  onFlagToggle: () => void;
   onFlagNoteChange: (v: string) => void;
+  onFlagSubmit: () => void;
 }
 
-function EntryRow({
+function ApprovalDetail({
   entry,
-  expanded,
-  onToggle,
-  onApprove,
-  onFlag,
-  approveLoading,
-  flagLoading,
+  payPeriod,
+  idx,
+  total,
   flagNote,
+  showFlagInput,
+  actionLoading,
+  apiError,
+  onBack,
+  onPrev,
+  onNext,
+  onApprove,
+  onFlagToggle,
   onFlagNoteChange,
-}: EntryRowProps) {
+  onFlagSubmit,
+}: DetailProps) {
   const isApproved = entry.status === "approved";
   const isFlagged = entry.status === "flagged";
   const totalHours = (entry.lines ?? []).reduce((s, l) => s + l.actual_hours, 0);
-  const hasChanges = (entry.lines ?? []).some(
-    (l) => l.actual_hours !== l.default_hours
-  );
+
+  // Compute % for each line
+  const getPercent = (hrs: number) =>
+    totalHours ? ((hrs / totalHours) * 100).toFixed(2) : "0.00";
 
   return (
-    <div>
-      <button
-        className="w-full flex items-center justify-between px-5 py-4 hover:bg-slate-50 transition-colors text-left"
-        onClick={onToggle}
-      >
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="min-w-0">
-            <p className="font-medium text-slate-800 truncate">
-              {entry.employee?.full_name ?? "—"}
-            </p>
-            <p className="text-xs text-slate-400 truncate">
-              {entry.employee?.email ?? "—"}
-            </p>
-          </div>
-          {hasChanges && !isApproved && (
-            <span className="shrink-0 text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
-              Hours changed
-            </span>
+    <div className="space-y-4">
+      {/* Navigation bar */}
+      <div className="flex items-center justify-between">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-slate-900"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          Back to list
+        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onPrev}
+            disabled={idx === 0}
+            className="p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-30 transition-colors"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <span className="text-xs text-slate-500 font-medium px-1">
+            {idx + 1} of {total}
+          </span>
+          <button
+            onClick={onNext}
+            disabled={idx === total - 1}
+            className="p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-30 transition-colors"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Official form card */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        {/* Header */}
+        <div className="bg-[#1e3a5f] text-white px-6 py-5 text-center">
+          <p className="text-xs font-semibold text-blue-300 uppercase tracking-widest mb-1">
+            Federal Time &amp; Effort Report
+          </p>
+          <h2 className="text-lg font-bold">Semi-Annual Certification</h2>
+          <p className="text-sm text-blue-200 mt-1">
+            Activity Report — Fiscal Year {new Date(payPeriod.start_date).getFullYear()}
+          </p>
+        </div>
+
+        <div className="px-6 py-5 space-y-5">
+          {/* Status banner */}
+          {isApproved && (
+            <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-xl px-4 py-3">
+              <CheckCircle className="w-4 h-4 text-green-600 shrink-0" />
+              <span className="text-sm font-semibold text-green-800">
+                Approved — {entry.approved_at ? formatDate(entry.approved_at.split("T")[0]) : ""}
+              </span>
+            </div>
           )}
           {isFlagged && (
-            <span className="shrink-0 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">
-              Flagged
-            </span>
+            <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+              <Flag className="w-4 h-4 text-red-600 shrink-0" />
+              <span className="text-sm font-semibold text-red-800">Flagged — returned to employee</span>
+            </div>
           )}
-        </div>
 
-        <div className="flex items-center gap-3 ml-3 shrink-0">
-          <div className="text-right">
-            <p className="font-bold text-slate-800 tabular-nums">
-              {totalHours.toFixed(1)} hrs
-            </p>
-            <StatusPill status={entry.status} />
+          {/* Employee info */}
+          <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm border border-slate-100 rounded-xl p-4 bg-slate-50">
+            <div>
+              <p className="text-xs text-slate-400 font-medium">Employee</p>
+              <p className="font-semibold text-slate-800">{entry.employee?.full_name ?? "—"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400 font-medium">Email</p>
+              <p className="text-slate-700">{entry.employee?.email ?? "—"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400 font-medium">Pay Period</p>
+              <p className="text-slate-700">
+                {formatDateLong(payPeriod.start_date)} – {formatDateLong(payPeriod.end_date)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400 font-medium">Submitted</p>
+              <p className="text-slate-700">
+                {entry.submitted_at ? formatDate(entry.submitted_at.split("T")[0]) : "—"}
+              </p>
+            </div>
           </div>
-          {expanded ? (
-            <ChevronUp className="w-4 h-4 text-slate-400" />
-          ) : (
-            <ChevronDown className="w-4 h-4 text-slate-400" />
-          )}
-        </div>
-      </button>
 
-      {expanded && (
-        <div className="border-t border-slate-100 bg-slate-50 px-5 py-4 space-y-4">
-          {/* Lines table */}
-          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 border-b border-slate-100">
-                <tr className="text-xs text-slate-500">
-                  <th className="text-left px-4 py-2.5 font-medium">Program / Grant</th>
-                  <th className="text-center px-3 py-2.5 font-medium w-24">Default</th>
-                  <th className="text-center px-3 py-2.5 font-medium w-24">Actual</th>
-                  <th className="text-center px-3 py-2.5 font-medium w-20">%</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {(entry.lines ?? []).map((line) => (
-                  <tr key={line.id}>
-                    <td className="px-4 py-2.5">
-                      <p className="text-slate-700 font-medium">
-                        {line.grant?.name ?? "—"}
-                      </p>
-                      <p className="text-xs text-slate-400 font-mono">
-                        {line.grant?.code ?? ""}
-                      </p>
+          {/* Programs / Hours table */}
+          <div>
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+              Federal Program Hours
+            </p>
+            <div className="border border-slate-200 rounded-xl overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-[#1e3a5f] text-white">
+                  <tr>
+                    <th className="text-left px-4 py-3 font-medium text-blue-100 text-xs">
+                      Program / Grant
+                    </th>
+                    <th className="text-center px-3 py-3 font-medium text-blue-100 text-xs w-28">
+                      Default Hrs
+                    </th>
+                    <th className="text-center px-3 py-3 font-medium text-blue-100 text-xs w-28">
+                      Actual Hrs
+                    </th>
+                    <th className="text-center px-3 py-3 font-medium text-blue-100 text-xs w-24">
+                      % of Time
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(entry.lines ?? []).map((line) => {
+                    const changed =
+                      line.actual_hours !== line.default_hours && line.default_hours > 0;
+                    return (
+                      <tr key={line.id} className={changed ? "bg-amber-50" : ""}>
+                        <td className="px-4 py-3">
+                          <p className="font-semibold text-slate-800">{line.grant?.name ?? "—"}</p>
+                          <p className="text-xs text-slate-400 font-mono mt-0.5">
+                            {line.grant?.code ?? ""}
+                          </p>
+                        </td>
+                        <td className="px-3 py-3 text-center text-slate-500 tabular-nums">
+                          {line.default_hours > 0 ? line.default_hours.toFixed(2) : "—"}
+                        </td>
+                        <td className="px-3 py-3 text-center tabular-nums">
+                          <span
+                            className={clsx(
+                              "font-bold",
+                              changed ? "text-amber-700" : "text-slate-800"
+                            )}
+                          >
+                            {line.actual_hours.toFixed(2)}
+                          </span>
+                          {changed && (
+                            <span className="block text-xs text-amber-600 font-medium">changed</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-3 text-center tabular-nums">
+                          <span className="inline-block bg-slate-100 text-slate-700 text-xs font-bold px-2.5 py-1 rounded-full">
+                            {getPercent(line.actual_hours)}%
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot className="border-t-2 border-slate-200 bg-slate-50">
+                  <tr>
+                    <td className="px-4 py-3 font-bold text-slate-700">Total</td>
+                    <td />
+                    <td className="px-3 py-3 text-center font-bold text-slate-800 tabular-nums">
+                      {totalHours.toFixed(2)}
                     </td>
-                    <td className="px-3 py-2.5 text-center text-slate-500 tabular-nums">
-                      {line.default_hours > 0 ? line.default_hours.toFixed(2) : "—"}
-                    </td>
-                    <td className="px-3 py-2.5 text-center tabular-nums">
-                      <span
-                        className={clsx(
-                          "font-semibold",
-                          line.actual_hours !== line.default_hours && line.default_hours > 0
-                            ? "text-amber-600"
-                            : "text-slate-800"
-                        )}
-                      >
-                        {line.actual_hours.toFixed(2)}
+                    <td className="px-3 py-3 text-center">
+                      <span className="inline-block bg-green-100 text-green-700 text-xs font-bold px-2.5 py-1 rounded-full">
+                        100.00%
                       </span>
                     </td>
-                    <td className="px-3 py-2.5 text-center text-slate-500 tabular-nums">
-                      {line.percent_time != null ? `${Number(line.percent_time).toFixed(2)}%` : "—"}
-                    </td>
                   </tr>
-                ))}
-              </tbody>
-              <tfoot className="border-t border-slate-200 bg-slate-50">
-                <tr>
-                  <td className="px-4 py-2 font-bold text-slate-700">Total</td>
-                  <td />
-                  <td className="px-3 py-2 text-center font-bold text-slate-800 tabular-nums">
-                    {totalHours.toFixed(2)}
-                  </td>
-                  <td className="px-3 py-2 text-center text-xs font-bold text-green-700">
-                    100%
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
+                </tfoot>
+              </table>
+            </div>
           </div>
 
           {/* Employee note */}
           {entry.notes && (
-            <div className="flex gap-2 text-sm text-slate-600 bg-white rounded-lg border border-slate-200 p-3">
-              <MessageSquare className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
-              <span>{entry.notes}</span>
+            <div className="flex gap-2 text-sm text-slate-600 bg-blue-50 rounded-xl border border-blue-100 p-3">
+              <MessageSquare className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-xs font-medium text-blue-600 mb-0.5">Employee note</p>
+                <p>{entry.notes}</p>
+              </div>
             </div>
           )}
 
-          {/* Submission date */}
-          {entry.submitted_at && (
-            <p className="text-xs text-slate-400">
-              Submitted: {formatDate(entry.submitted_at.split("T")[0])}
+          {/* Certification statement */}
+          {!isApproved && (
+            <div className="border border-slate-200 rounded-xl p-4 bg-slate-50 space-y-2">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-slate-500 shrink-0" />
+                <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
+                  Supervisor Certification
+                </p>
+              </div>
+              <p className="text-sm text-slate-600 leading-relaxed">
+                Approval serves as your <strong>electronic signature</strong> verifying that this
+                data is correct to the best of your knowledge. Once approved, you will not be able
+                to make changes.
+              </p>
+              <p className="text-sm text-slate-700 font-medium leading-relaxed">
+                I certify that the employee listed above worked the hours shown on activities
+                authorized by the federal program(s) stated above, and that this time &amp; effort
+                report is accurate.
+              </p>
+            </div>
+          )}
+
+          {apiError && (
+            <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-4 py-3">
+              {apiError}
             </p>
           )}
 
-          {/* Actions */}
+          {/* Action buttons */}
           {!isApproved && (
             <div className="space-y-3">
-              <div className="flex gap-2">
+              <div className="flex gap-3">
                 <button
                   onClick={onApprove}
-                  disabled={approveLoading}
-                  className="flex-1 flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white font-semibold py-2.5 rounded-xl transition-colors disabled:opacity-60"
+                  disabled={!!actionLoading}
+                  className="flex-1 flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white font-bold py-3.5 rounded-xl transition-colors disabled:opacity-60 text-base shadow-sm"
                 >
-                  {approveLoading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                  {actionLoading === entry.id ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
                   ) : (
-                    <CheckCircle className="w-4 h-4" />
+                    <CheckCircle className="w-5 h-5" />
                   )}
-                  Approve
+                  APPROVE
                 </button>
                 <button
-                  onClick={onFlag}
-                  disabled={flagLoading}
-                  className="flex-1 flex items-center justify-center gap-2 bg-white border border-red-200 hover:bg-red-50 text-red-600 font-semibold py-2.5 rounded-xl transition-colors disabled:opacity-60"
+                  onClick={onFlagToggle}
+                  disabled={!!actionLoading}
+                  className="flex items-center justify-center gap-2 border border-red-200 bg-white hover:bg-red-50 text-red-600 font-semibold px-5 py-3.5 rounded-xl transition-colors disabled:opacity-60"
                 >
-                  {flagLoading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Flag className="w-4 h-4" />
-                  )}
+                  <Flag className="w-4 h-4" />
                   Flag
                 </button>
               </div>
 
-              <input
-                type="text"
-                placeholder="Add note for employee (shown when flagged)…"
-                value={flagNote}
-                onChange={(e) => onFlagNoteChange(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-              />
+              {showFlagInput && (
+                <div className="space-y-2">
+                  <textarea
+                    rows={2}
+                    value={flagNote}
+                    onChange={(e) => onFlagNoteChange(e.target.value)}
+                    placeholder="Explain why this is being returned to the employee…"
+                    className="w-full px-3 py-2.5 text-sm border border-red-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400 resize-none"
+                    autoFocus
+                  />
+                  <button
+                    onClick={onFlagSubmit}
+                    disabled={!!actionLoading}
+                    className="w-full flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white font-semibold py-2.5 rounded-xl transition-colors disabled:opacity-60"
+                  >
+                    {actionLoading === entry.id + "-flag" ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Flag className="w-4 h-4" />
+                    )}
+                    Send Back to Employee
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
-          {isApproved && (
-            <div className="flex items-center gap-2 text-green-700 text-sm font-medium">
-              <CheckCircle className="w-4 h-4" />
-              Approved{" "}
-              {entry.approved_at
-                ? formatDate(entry.approved_at.split("T")[0])
-                : ""}
-            </div>
-          )}
+          {/* Navigation at bottom */}
+          <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+            <button
+              onClick={onPrev}
+              disabled={idx === 0}
+              className="flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-800 disabled:opacity-30"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              Previous
+            </button>
+            <span className="text-xs text-slate-400">
+              {idx + 1} of {total} employees
+            </span>
+            <button
+              onClick={onNext}
+              disabled={idx === total - 1}
+              className="flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-800 disabled:opacity-30"
+            >
+              Next
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
 
-function StatusPill({ status }: { status: string }) {
+// ── Small helpers ────────────────────────────────────────────────────────────
+
+function StatusDot({ status }: { status: string }) {
+  const colors: Record<string, string> = {
+    submitted: "bg-amber-400",
+    approved: "bg-green-400",
+    flagged: "bg-red-400",
+    draft: "bg-slate-300",
+  };
+  return <div className={`w-2 h-2 rounded-full shrink-0 ${colors[status] ?? "bg-slate-300"}`} />;
+}
+
+function StatusLabel({ status }: { status: string }) {
   const config: Record<string, { label: string; className: string }> = {
     submitted: { label: "Pending", className: "text-amber-600" },
     approved: { label: "Approved", className: "text-green-600" },
