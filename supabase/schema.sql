@@ -78,13 +78,7 @@ create table if not exists time_entry_lines (
   grant_id       uuid not null references grants(id) on delete cascade,
   default_hours  numeric(6,2) not null default 0,
   actual_hours   numeric(6,2) not null default 0,
-  percent_time   numeric(5,2) generated always as (
-    case when actual_hours = 0 then 0
-         else round(actual_hours / nullif(
-           (select sum(l2.actual_hours) from time_entry_lines l2 where l2.time_entry_id = time_entry_id), 0
-         ) * 100, 2)
-    end
-  ) stored,
+  percent_time   numeric(5,2) not null default 0,
   unique (time_entry_id, grant_id)
 );
 

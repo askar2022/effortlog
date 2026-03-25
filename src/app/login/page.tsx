@@ -27,11 +27,11 @@ export default function LoginPage() {
     const supabase = createClient();
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { shouldCreateUser: false },
+      options: { shouldCreateUser: true },
     });
     setLoading(false);
     if (error) {
-      setError("Email not found. Please contact your administrator.");
+      setError("Could not send code. Please try again.");
       return;
     }
     setStep("otp");

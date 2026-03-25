@@ -57,13 +57,19 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: entryErr?.message ?? "Failed to save entry" }, { status: 500 });
   }
 
-  // Upsert all lines
+  // Calculate percent_time for each line (total actual hours across all lines)
+  const totalActual = lines.reduce((sum, l) => sum + (l.actual_hours || 0), 0);
+
+  // Upsert all lines with calculated percent_time
   const { error: linesErr } = await db.from("time_entry_lines").upsert(
     lines.map((l) => ({
       time_entry_id: entry.id,
       grant_id: l.grant_id,
       default_hours: l.default_hours,
       actual_hours: l.actual_hours,
+      percent_time: totalActual > 0
+        ? parseFloat(((l.actual_hours / totalActual) * 100).toFixed(2))
+        : 0,
     })),
     { onConflict: "time_entry_id,grant_id" }
   );
